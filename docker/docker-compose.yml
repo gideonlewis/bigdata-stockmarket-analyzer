@@ -1,0 +1,191 @@
+version: "3.7"
+services:  
+    # postgres used by airflow
+    postgres:
+        image: postgres:13
+        networks:
+            - default_net
+        volumes: 
+            # Create Test database on Postgresql
+            - ./docker-airflow/pg-init-scripts/create_table.sql:/docker-entrypoint-initdb.d/create_table.sql
+        environment:
+            - POSTGRES_USER=airflow
+            - POSTGRES_PASSWORD=airflow
+            - POSTGRES_DB=airflow
+        ports:
+            - "5432:5432"
+
+
+    pgadmin:
+        image: dpage/pgadmin4
+        networks:
+            - default_net
+        restart: always
+        environment:
+            PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-pgadmin4@pgadmin.org}
+            PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+            PGADMIN_CONFIG_SERVER_MODE: 'False'
+        ports:
+            - "5050:80"
+            
+    # airflow LocalExecutor
+    airflow-webserver:
+        image: docker-airflow-spark:1.10.7_3.1.2
+        restart: always
+        networks:
+            - default_net
+        depends_on:
+            - postgres
+        environment:
+            - LOAD_EX=n
+            - EXECUTOR=Local
+
+        volumes:
+            - ../dags:/usr/local/airflow/dags #DAG folder
+            - ../spark/app:/usr/local/spark/app #Spark Scripts (Must be the same path in airflow and Spark Cluster)
+            - ../spark/resources:/usr/local/spark/resources #Resources folder (Must be the same path in airflow and Spark Cluster)
+            - ../docker/docker-airflow/config/airflow.cfg:/usr/local/airflow/airflow/airflow.cfg
+
+
+        ports:
+            - "8282:8282"
+        command: webserver
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+
+    # Spark with 3 workers
+    spark:
+        image: bitnami/spark:3.1.2
+        user: root # Run container as root container: https://docs.bitnami.com/tutorials/work-with-non-root-containers/
+        hostname: spark
+        networks:
+            - default_net
+        environment:
+            - SPARK_MODE=master
+            - SPARK_RPC_AUTHENTICATION_ENABLED=no
+            - SPARK_RPC_ENCRYPTION_ENABLED=no
+            - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+            - SPARK_SSL_ENABLED=no
+        volumes:
+            - ../spark/app:/usr/local/spark/app # Spark scripts folder (Must be the same path in airflow and Spark Cluster)
+            - ../spark/resources:/usr/local/spark/resources #Resources folder (Must be the same path in airflow and Spark Cluster)
+        ports:
+            - "8181:8080"
+            - "7077:7077"
+
+    spark-worker-1:
+        image: bitnami/spark:3.1.2
+        user: root
+        networks:
+            - default_net
+        environment:
+            - SPARK_MODE=worker
+            - SPARK_MASTER_URL=spark://spark:7077
+            - SPARK_WORKER_MEMORY=1G
+            - SPARK_WORKER_CORES=1
+            - SPARK_RPC_AUTHENTICATION_ENABLED=no
+            - SPARK_RPC_ENCRYPTION_ENABLED=no
+            - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+            - SPARK_SSL_ENABLED=no
+        volumes:
+            - ../spark/app:/usr/local/spark/app # Spark scripts folder (Must be the same path in airflow and Spark Cluster)
+            - ../spark/resources:/usr/local/spark/resources #Resources folder (Must be the same path in airflow and Spark Cluster)
+
+    spark-worker-2:
+        image: bitnami/spark:3.1.2
+        user: root
+        networks:
+            - default_net
+        environment:
+            - SPARK_MODE=worker
+            - SPARK_MASTER_URL=spark://spark:7077
+            - SPARK_WORKER_MEMORY=1G
+            - SPARK_WORKER_CORES=1
+            - SPARK_RPC_AUTHENTICATION_ENABLED=no
+            - SPARK_RPC_ENCRYPTION_ENABLED=no
+            - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+            - SPARK_SSL_ENABLED=no
+        volumes:
+            - ../spark/app:/usr/local/spark/app # Spark scripts folder (Must be the same path in airflow and Spark Cluster)
+            - ../spark/resources:/usr/local/spark/resources #Resources folder (Must be the same path in airflow and Spark Cluster)
+
+    spark-worker-3:
+        image: bitnami/spark:3.1.2
+        user: root
+        networks:
+            - default_net
+        environment:
+            - SPARK_MODE=worker
+            - SPARK_MASTER_URL=spark://spark:7077
+            - SPARK_WORKER_MEMORY=1G
+            - SPARK_WORKER_CORES=1
+            - SPARK_RPC_AUTHENTICATION_ENABLED=no
+            - SPARK_RPC_ENCRYPTION_ENABLED=no
+            - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+            - SPARK_SSL_ENABLED=no
+        volumes:
+            - ../spark/app:/usr/local/spark/app # Spark scripts folder (Must be the same path in airflow and Spark Cluster)
+            - ../spark/resources:/usr/local/spark/resources #Resources folder (Must be the same path in airflow and Spark Cluster)
+    
+    zookeeper:                                          # create zookeeper container
+        image: wurstmeister/zookeeper
+        container_name: zookeeper_container
+        ports:
+            - "2181:2181"   
+        networks:
+          - default_net
+
+    kafka:                                              # create an instance of a Kafka broker in a container
+        image: wurstmeister/kafka
+        container_name: kafka_container
+        ports:
+            - "9092:9092"                               # expose port
+        environment:
+            KAFKA_ADVERTISED_HOST_NAME: kafka           # specify the docker host IP at which other containers can reach the broker
+            KAFKA_CREATE_TOPICS: "TopicA:1:1"           # create a topic called 'TopicA"  with 1 partition and 1 replica
+            KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181     # specify where the broker can reach Zookeeper
+            KAFKA_LISTENERS: PLAINTEXT://:9092          # the list of addresses on which the Kafka broker will listen on for incoming connections.
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092  # Kafka sends the value of this variable to clients during their connection. After receiving that value, the clients use it for sending/consuming records to/from the Kafka broker.y connect to it.
+        volumes:
+            - ../run/docker.sock:/var/run/docker.sock
+        networks:
+          - default_net
+    # kafka-ui:
+    #     image: provectuslabs/kafka-ui
+    #     container_name: kafka-ui
+    #     port:
+    #         - "9090:8080"
+    #     environment:
+    #         KAFKA_CLUSTERS_0_NAME: local
+    #     restart: always
+
+
+    #Jupyter notebook
+    jupyter-spark:
+        image: jupyter/pyspark-notebook:spark-3.1.2
+        networks:
+            - default_net
+        ports:
+          - "8888:8888"
+          - "4040-4080:4040-4080"
+        volumes:
+          - ../notebooks:/home/jovyan/work/notebooks/
+          - ../spark/resources/data:/home/jovyan/work/data/
+          - ../spark/resources/jars:/home/jovyan/work/jars/
+
+    # streamlit:
+    #     image: streamlit:latest
+    #     networks:
+    #         - default_net
+    #     ports:
+    #       - "8501:8501"
+    #     volumes:
+    #       - ../spark/src:/usr/src/app/src
+    #     # command: "streamlit run src/main.py"
+
+
+networks:
+    default_net:
